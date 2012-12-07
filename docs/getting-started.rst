@@ -25,9 +25,9 @@ There are three main components (or processes) to consider when running huey:
 * the queue where tasks are stored, e.g. Redis
 
 These three processes are shown in the screenshot below -- the left-hand pane
-shows the producer: a simple program that asks the user for input on how many 
-"beans" to count.  In the top-right, the consumer is running.  It is doing the 
-actual "computation" and simply printing the number of beans counted.  In the 
+shows the producer: a simple program that asks the user for input on how many
+"beans" to count.  In the top-right, the consumer is running.  It is doing the
+actual "computation" and simply printing the number of beans counted.  In the
 bottom-right is the queue, Redis in this example, which we're monitoring and
 shows tasks being enqueued (``LPUSH``) and read (``BRPOP``) from the database.
 
@@ -47,9 +47,8 @@ use, where to log activity, etc.
 .. code-block:: python
 
     # config.py
+    from huey import BaseConfiguration, Invoker
     from huey.backends.redis_backend import RedisBlockingQueue
-    from huey.bin.config import BaseConfiguration
-    from huey.queue import Invoker
 
 
     queue = RedisBlockingQueue('test-queue', host='localhost', port=6379)
@@ -61,15 +60,15 @@ use, where to log activity, etc.
         THREADS = 4
 
 The interesting parts of this configuration module are the :py:class:`Invoker` object
-and the :py:class:`RedisBlockingQueue` object.  The ``queue`` is responsible for 
-storing and retrieving messages, and the ``invoker`` is used by your application 
-code to coordinate function calls with a queue backend.  We'll see how the ``invoker`` 
+and the :py:class:`RedisBlockingQueue` object.  The ``queue`` is responsible for
+storing and retrieving messages, and the ``invoker`` is used by your application
+code to coordinate function calls with a queue backend.  We'll see how the ``invoker``
 is used when looking at the actual function responsible for counting beans:
 
 .. code-block:: python
 
     # commands.py
-    from huey.decorators import queue_command
+    from huey import queue_command
 
     from config import invoker # import the invoker we instantiated in config.py
 
@@ -113,15 +112,14 @@ Getting results from jobs
 ^^^^^^^^^^^^^^^^^^^^^^^^^
 
 The above example illustrates a "send and forget" approach, but what if your
-application needs to do something with the results of a task?  To get results 
+application needs to do something with the results of a task?  To get results
 from your tasks, we'll set up the ``RedisDataStore`` by adding the following
 lines to the ``config.py`` module:
 
 .. code-block:: python
 
+    from huey import BaseConfiguration, Invoker
     from huey.backends.redis_backend import RedisBlockingQueue, RedisDataStore
-    from huey.bin.config import BaseConfiguration
-    from huey.queue import Invoker
 
 
     queue = RedisBlockingQueue('test-queue', host='localhost', port=6379)
@@ -140,7 +138,7 @@ module to return a string rather than simply printing to stdout:
 
 .. code-block:: python
 
-    from huey.decorators import queue_command
+    from huey import queue_command
 
     from config import invoker
 
@@ -185,14 +183,20 @@ and see how huey handles it.  Execute the following:
 .. code-block:: python
 
     >>> import datetime
-    >>> in_a_minute = datetime.datetime.now() + datetime.timedelta(seconds=60)
-    >>> res = count_beans.schedule(args=(100,), eta=in_a_minute)
+    >>> res = count_beans.schedule(args=(100,), delay=60)
     >>> res
     <huey.queue.AsyncData object at 0xb72915ec>
     >>> res.get() # <--- this returns None, no data is ready
     >>> res.get() # <--- still no data...
     >>> res.get(blocking=True) # <--- ok, let's just block until its ready
     'Counted 100 beans'
+
+You can specify an "estimated time of arrival" as well using datetimes:
+
+.. code-block:: python
+
+    >>> in_a_minute = datetime.datetime.now() + datetime.timedelta(seconds=60)
+    >>> res = count_beans.schedule(args=(100,), eta=in_a_minute)
 
 Looking at the redis output, we see the following (simplified for reability)::
 
@@ -219,7 +223,7 @@ Here is a task that will be retried 3 times and will blow up every time:
 .. code-block:: python
 
     # commands.py
-    from huey.decorators import queue_command
+    from huey import queue_command
 
     from config import invoker
 
@@ -248,7 +252,7 @@ delay, and also to print the current time to show that its working.
 
     # commands.py
     from datetime import datetime
-    
+
     @queue_command(invoker, retries=3, retry_delay=10)
     def try_thrice():
         print 'trying....%s' % datetime.now()
@@ -275,7 +279,7 @@ test that the consumer is executing the tasks on schedule.
 
     # commands.py
     from datetime import datetime
-    from huey.decorators import queue_command, periodic_command, crontab
+    from huey import queue_command, periodic_command, crontab
 
     from config import invoker
 
@@ -283,7 +287,7 @@ test that the consumer is executing the tasks on schedule.
     @queue_command(invoker)
     def count_beans(num):
         return 'Counted %s beans' % num
-    
+
     @queue_command(invoker, retries=3, retry_delay=10)
     def try_thrice():
         print 'trying....%s' % datetime.now()
@@ -310,6 +314,94 @@ for enqueueing periodic commands.  The configuration now looks like this:
 Now, when we run the consumer it will start printing the time every minute:
 
 .. image:: example_crontab.jpg
+
+
+Preventing tasks from executing
+-------------------------------
+
+It is possible to prevent tasks from executing.  This applies to normal tasks,
+tasks scheduled in the future, and periodic tasks.
+
+.. note:: In order to "revoke" tasks you will need to be using a ``DataStore``.
+
+Canceling a normal task or one scheduled in the future
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+You can cancel a normal task provided the task has not started execution by
+the consumer:
+
+.. code-block:: python
+
+    # count some beans
+    res = count_beans(10000000)
+
+    # provided the command has not started executing yet, you can
+    # cancel it by calling revoke() on the AsyncData object
+    res.revoke()
+
+
+The same applies to tasks that are scheduled in the future:
+
+.. code-block:: python
+
+    res = count_beans.schedule(args=(100000,), eta=in_the_future)
+    res.revoke()
+
+    # and you can actually change your mind and restore it, provided
+    # it has not already been "skipped" by the consumer
+    res.restore()
+
+
+Canceling tasks that execute periodically
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+When we start dealing with periodic tasks, the options for revoking get
+a bit more interesting.
+
+We'll be using the print time command as an example:
+
+.. code-block:: python
+
+    @periodic_command(invoker, crontab(minute='*'))
+    def print_time():
+        print datetime.now()
+
+We can prevent a periodic task from executing on the next go-round:
+
+.. code-block:: python
+
+    # only prevent it from running once
+    print_time.revoke(revoke_once=True)
+
+Since the above task executes every minute, what we will see is that the
+output will skip the next minute and then resume normally.
+
+We can prevent a task from executing until a certain time:
+
+.. code-block:: python
+
+    # prevent printing time for 10 minutes
+    now = datetime.datetime.utcnow()
+    in_10 = now + datetime.timedelta(seconds=600)
+
+    print_time.revoke(revoke_until=in_10)
+
+.. note:: Remember to use UTC if the consumer is using UTC.
+
+Finally, we can prevent the task from running indefinitely:
+
+.. code-block:: python
+
+    # will not print time until we call revoke() again with
+    # different parameters or restore the task
+    print_time.revoke()
+
+At any time we can restore the task and it will resume normal
+execution:
+
+.. code-block:: python
+
+    print_time.restore()
 
 
 Reading more
@@ -388,8 +480,8 @@ are a couple key differences:
 
 Let's test it out:
 
-1. Start up the consumer using the management command: ``django-admin.py run_huey``
-2. Open up a shell: ``django-admin.py shell``
+1. Start up the consumer using the management command: ``./manage.py run_huey`` (``django-admin.py run_huey`` also works)
+2. Open up a shell: ``./manage.py shell``
 3. Try running the ``count_beans()`` function a couple times
 
 .. image:: example_django.jpg

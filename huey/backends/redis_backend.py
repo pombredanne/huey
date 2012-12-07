@@ -19,20 +19,23 @@ class RedisQueue(BaseQueue):
         }
         """
         super(RedisQueue, self).__init__(name, **connection)
-        
+
         self.queue_name = 'huey.redis.%s' % re.sub('[^a-z0-9]', '', name)
 
         self.conn = redis.Redis(**connection)
-    
+
     def write(self, data):
         self.conn.lpush(self.queue_name, data)
-    
+
     def read(self):
         return self.conn.rpop(self.queue_name)
-    
+
+    def remove(self, data):
+        return self.conn.lrem(self.queue_name, data)
+
     def flush(self):
         self.conn.delete(self.queue_name)
-    
+
     def __len__(self):
         return self.conn.llen(self.queue_name)
 
@@ -64,20 +67,23 @@ class RedisDataStore(BaseDataStore):
         }
         """
         super(RedisDataStore, self).__init__(name, **connection)
-        
+
         self.storage_name = 'huey.redis.results.%s' % re.sub('[^a-z0-9]', '', name)
         self.conn = redis.Redis(**connection)
-    
+
     def put(self, key, value):
         self.conn.hset(self.storage_name, key, value)
-    
+
+    def peek(self, key):
+        if self.conn.hexists(self.storage_name, key):
+            return self.conn.hget(self.storage_name, key)
+        return EmptyData
+
     def get(self, key):
-        val = self.conn.hget(self.storage_name, key)
-        if val:
+        val = self.peek(key)
+        if val is not EmptyData:
             self.conn.hdel(self.storage_name, key)
-        else:
-            val = EmptyData
         return val
-    
+
     def flush(self):
         self.conn.delete(self.storage_name)
