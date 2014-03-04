@@ -1,123 +1,117 @@
+"""
+This module contains a lot of cruft to handle instantiating a "Huey" object
+using Django settings.  Unlike more flexible python apps, the huey django
+integration consists of a single global Huey instance configured via the
+settings module.
+"""
 import sys
 
 from django.conf import settings
+from django.db import close_connection
 
-from huey.queue import Invoker
+from huey import crontab
+from huey import Huey
 from huey.utils import load_class
 
 
 configuration_message = """
-Please configure your queue, example:
+Configuring Huey for use with Django
+====================================
 
-HUEY_CONFIG = {
-    'QUEUE': 'huey.backends.redis_backend.RedisQueue',
-    'QUEUE_CONNECTION': 'localhost:6379:0',
-    'THREADS': 4,
+Huey was designed to be simple to configure in the general case.  For that
+reason, huey will "just work" with no configuration at all provided you have
+Redis installed and running locally.
+
+On the other hand, you can configure huey manually using the following
+setting structure.  The following example uses Redis on localhost:
+
+Simply point to a backend:
+
+HUEY = {
+    'backend': 'huey.backends.redis_backend',
+    'name': 'unique name',
+    'connection': {'host': 'localhost', 'port': 6379}
+
+    'consumer_options': {'workers': 4},
 }
 
-The following settings are required:
-------------------------------------
+If you would like to configure Huey's logger using Django's integrated logging
+settings, the logger used by consumer is named "huey.consumer".
 
-QUEUE (string or Queue instance)
-    Either a queue instance or a string pointing to the module path and class
-    name of the queue.  If a string is used, you may also need to specify a
-    connection string.
-    
-    Example: 'huey.backends.redis_backend.RedisQueue'
+For more granular control, you can assign HUEY programmatically:
 
-
-The following settings are recommended:
----------------------------------------
-
-QUEUE_NAME (string), default = database name
-
-QUEUE_CONNECTION (dictionary)
-    If the HUEY_QUEUE was specified using a string, use this parameter to
-    instruct the queue class how to connect.
-    
-    Example: 'localhost:6379:0' # for the RedisQueue
-
-RESULT_STORE (string or DataStore instance)
-    Either a DataStore instance or a string pointing to the module path and
-    class name of the result store.
-    
-    Example: 'huey.backends.redis_backend.RedisDataStore'
-
-RESULT_STORE_NAME (string), default = database name
-
-RESULT_STORE_CONNECTION (string)
-    See notes for QUEUE_CONNECTION
-
-TASK_STORE
-    Follows same pattern as RESULT_STORE
-
-
-The following settings are optional:
-------------------------------------
-
-PERIODIC (boolean), default = False
-    Determines whether or not to the consumer will enqueue periodic commands.
-    If you are running multiple consumers, only one of them should be configured
-    to enqueue periodic commands.
-
-THREADS (int), default = 1
-    Number of worker threads to use when processing jobs
-
-LOGFILE (string), default = None
-
-LOGLEVEL (int), default = logging.INFO
-
-BACKOFF (numeric), default = 1.15
-    How much to increase delay when no jobs are present
-
-INITIAL_DELAY (numeric), default = 0.1
-    Initial amount of time to sleep when waiting for jobs
-
-MAX_DELAY (numeric), default = 10
-    Max amount of time to sleep when waiting for jobs
-
-ALWAYS_EAGER, default = False
-    Whether to skip enqueue-ing and run in-band (useful for debugging)
+HUEY = Huey(RedisBlockingQueue('my-queue'))
 """
 
-config = getattr(settings, 'HUEY_CONFIG', None)
-if not config or 'QUEUE' not in config:
-    print configuration_message
+def default_queue_name():
+    try:
+        return settings.DATABASE_NAME
+    except AttributeError:
+        return settings.DATABASES['default']['NAME']
+    except KeyError:
+        return 'huey'
+
+def config_error(msg):
+    print(configuration_message)
+    print('\n\n')
+    print(msg)
     sys.exit(1)
 
-queue = config['QUEUE']
+def dynamic_import(obj, key, required=False):
+    try:
+        path = obj[key]
+    except KeyError:
+        if required:
+            config_error('Missing required configuration: "%s"' % key)
+        return None
+    try:
+        return load_class(path + '.Components')
+    except ImportError:
+        config_error('Unable to import %s: "%s"' % (key, path))
 
-if 'default' in settings.DATABASES:
-    backup_name = settings.DATABASES['default']['NAME'].rsplit('/', 1)[-1]
-else:
-    backup_name = 'huey'
+try:
+    HUEY = getattr(settings, 'HUEY', None)
+except:
+    config_error('Error encountered reading settings.HUEY')
 
-if isinstance(queue, basestring):
-    QueueClass = load_class(queue)
-    queue = QueueClass(
-        config.get('QUEUE_NAME', backup_name),
-        **config.get('QUEUE_CONNECTION', {})
-    )
-    config['QUEUE'] = queue
+if HUEY is None:
+    try:
+        from huey import RedisHuey
+    except ImportError:
+        config_error('Error: Huey could not import the redis backend. '
+                     'Install `redis-py`.')
+    HUEY = RedisHuey(default_queue_name())
 
-result_store = config.get('RESULT_STORE', None)
+if not isinstance(HUEY, Huey):
+    Queue, DataStore, Schedule, Events = dynamic_import(HUEY, 'backend')
+    name = HUEY.get('name') or default_queue_name()
+    conn = HUEY.get('connection', {})
+    always_eager = HUEY.get('always_eager', False)
+    HUEY = Huey(
+        Queue(name, **conn),
+        DataStore(name, **conn),
+        Schedule(name, **conn),
+        Events(name, **conn),
+        always_eager=always_eager)
 
-if isinstance(result_store, basestring):
-    DataStoreClass = load_class(result_store)
-    result_store = DataStoreClass(
-        config.get('RESULT_STORE_NAME', backup_name),
-        **config.get('RESULT_STORE_CONNECTION', {})
-    )
-    config['RESULT_STORE'] = result_store
+task = HUEY.task
+periodic_task = HUEY.periodic_task
 
-task_store = config.get('TASK_STORE', None)
+def close_db(fn):
+    """Decorator to be used with tasks that may operate on the database."""
+    def inner(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            close_connection()
+    return inner
 
-if isinstance(task_store, basestring):
-    DataStoreClass = load_class(task_store)
-    task_store = DataStoreClass(
-        config.get('TASK_STORE_NAME', backup_name),
-        **config.get('TASK_STORE_CONNECTION', {})
-    )
-    config['TASK_STORE'] = task_store
+def db_task(*args, **kwargs):
+    def decorator(fn):
+        return close_db(task(*args, **kwargs)(fn))
+    return decorator
 
-invoker = Invoker(queue, result_store, task_store, always_eager=config.get('ALWAYS_EAGER', False))
+def db_periodic_task(*args, **kwargs):
+    def decorator(fn):
+        return close_db(periodic_task(*args, **kwargs)(fn))
+    return decorator

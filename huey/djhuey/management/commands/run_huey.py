@@ -3,25 +3,22 @@ import sys
 from optparse import make_option
 
 from django.conf import settings
-from django.core.management.base import BaseCommand, CommandError
+from django.core.management.base import BaseCommand
 from django.utils.importlib import import_module
 
-from huey.bin.huey_consumer import Consumer, load_config
-from huey.queue import Invoker
-from huey.utils import load_class
+from huey.bin.huey_consumer import Consumer
 
 
 class Command(BaseCommand):
     """
     Queue consumer.  Example usage::
-    
+
     To start the consumer (note you must export the settings module):
-    
+
     django-admin.py run_huey
     """
-    
     help = "Run the queue consumer"
-    
+
     option_list = BaseCommand.option_list + (
         make_option('--periodic', '-p',
             dest='periodic',
@@ -33,18 +30,28 @@ class Command(BaseCommand):
             action='store_false',
             help='Do not enqueue periodic commands'
         ),
-        make_option('--threads', '-t',
-            dest='threads',
+        make_option('--workers', '-w',
+            dest='workers',
             type='int',
             help='Number of worker threads'
         ),
+        make_option('--delay', '-d',
+            dest='initial_delay',
+            type='float',
+            help='Delay between polling requests'
+        ),
+        make_option('--max_delay', '-m',
+            dest='max_delay',
+            type='float',
+            help='Maximum delay between polling requests'
+        ),
     )
-    
+
     def autodiscover(self):
         # this is to find modules named <commands.py> in a django project's
         # installed apps directories
-        module_name = 'commands'
-        
+        module_name = 'tasks'
+
         for app in settings.INSTALLED_APPS:
             try:
                 import_module(app)
@@ -57,22 +64,27 @@ class Command(BaseCommand):
                 continue
             import_module('%s.%s' % (app, module_name))
             app_path = sys.modules['%s.%s' % (app, module_name)]
-    
-    def handle(self, *args, **options):
-        config = load_config('huey.djhuey.conf.Configuration')
 
-        if options['threads'] is not None:
-            config.THREADS = options['threads']
+    def handle(self, *args, **options):
+        from huey.djhuey import HUEY
+        try:
+            consumer_options = settings.HUEY['consumer_options']
+        except:
+            consumer_options = {}
+
+        if options['workers'] is not None:
+            consumer_options['workers'] = options['workers']
 
         if options['periodic'] is not None:
-            config.PERIODIC = options['periodic']
-        
+            consumer_options['periodic'] = options['periodic']
+
+        if options['initial_delay'] is not None:
+            consumer_options['initial_delay'] = options['initial_delay']
+
+        if options['max_delay'] is not None:
+            consumer_options['max_delay'] = options['max_delay']
+
         self.autodiscover()
-        
-        queue = config.QUEUE
-        result_store = config.RESULT_STORE
-        task_store = config.TASK_STORE
-        invoker = Invoker(queue, result_store, task_store)
-        
-        consumer = Consumer(invoker, config)
+
+        consumer = Consumer(HUEY, **consumer_options)
         consumer.run()

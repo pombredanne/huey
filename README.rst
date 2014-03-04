@@ -6,8 +6,8 @@ huey - a little task queue
 a lightweight alternative.
 
 * written in python
-* support for django
 * no deps outside the standard lib, except Redis (or you can roll your own backend)
+* support for Django
 
 supports:
 
@@ -17,6 +17,24 @@ supports:
 * retrying tasks that fail
 * task result storage
 
+Huey's API
+----------
+
+::
+
+    from huey import RedisHuey, crontab
+
+    huey = RedisHuey('my-app', host='redis.myapp.com')
+
+    @huey.task()
+    def add_numbers(a, b):
+        return a + b
+
+    @huey.periodic_task(crontab(minute='0', hour='3'))
+    def nightly_backup():
+        sync_all_data()
+
+
 named after my cat:
 
-.. image:: http://huey.readthedocs.org/en/latest/_images/huey.jpg
+.. image:: http://media.charlesleifer.com/blog/photos/thumbnails/IMG_20130402_154858_650x650.jpg

@@ -49,13 +49,41 @@ class BaseQueue(object):
         raise NotImplementedError
 
 
+class BaseSchedule(object):
+    def __init__(self, name, **connection):
+        """
+        Initialize the Queue - this happens once when the module is loaded
+
+        :param name: A string representation of the name for this queue
+        :param connection: Connection parameters for the queue
+        """
+        self.name = name
+        self.connection = connection
+
+    def add(self, data, ts):
+        """
+        Add the timestamped data to the task schedule.
+        """
+        raise NotImplementedError
+
+    def read(self, ts):
+        """
+        Read scheduled items for the given timestamp
+        """
+        raise NotImplementedError
+
+    def flush(self):
+        """Delete all items in schedule."""
+        raise NotImplementedError
+
+
 class BaseDataStore(object):
     """
     Base implementation for a data store
     """
     def __init__(self, name, **connection):
         """
-        Initialize the data store - this happens once when the module is loaded
+        Initialize the data store
         """
         self.name = name
         self.connection = connection
@@ -71,3 +99,15 @@ class BaseDataStore(object):
 
     def flush(self):
         raise NotImplementedError
+
+
+class BaseEventEmitter(object):
+    def __init__(self, channel, **connection):
+        self.channel = channel
+        self.connection = connection
+
+    def emit(self, message):
+        raise NotImplementedError
+
+
+Components = (BaseQueue, BaseDataStore, BaseSchedule, BaseEventEmitter)

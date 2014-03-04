@@ -1,20 +1,17 @@
+import logging
+
 INSTALLED_APPS = [
     'huey.djhuey',
     'test_app',
 ]
 
-HUEY_CONFIG = {
-    'QUEUE': 'huey.backends.redis_backend.RedisBlockingQueue',
-    'QUEUE_NAME': 'test-queue',
-    'QUEUE_CONNECTION': {
-        'host': 'localhost',
-        'port': 6379,
-    },
-    'RESULT_STORE': 'huey.backends.redis_backend.RedisDataStore',
-    'RESULT_STORE_CONNECTION': {
-        'host': 'localhost',
-        'port': 6379,
-    },
-    'PERIODIC': True,
-    'THREADS': 4,
+HUEY = {
+    'name': 'test-django',
+    'backend': 'huey.backends.redis_backend',
+    'consumer_options': {
+        'loglevel': logging.DEBUG,
+        'workers': 2,
+    }
 }
+
+SECRET_KEY = 'foo'
