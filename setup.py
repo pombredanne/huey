@@ -4,7 +4,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='huey',
-    version='0.4.1',
+    version=__import__('huey').__version__,
     description='huey, a little task queue',
     author='Charles Leifer',
     author_email='coleifer@gmail.com',
@@ -24,5 +24,10 @@ setup(
         'Framework :: Django',
     ],
     test_suite='runtests.runtests',
+    entry_points={
+        'console_scripts': [
+            'huey_consumer = huey.bin.huey_consumer:consumer_main'
+            ]
+    },
     scripts = ['huey/bin/huey_consumer.py'],
 )

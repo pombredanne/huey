@@ -4,9 +4,21 @@ from optparse import make_option
 
 from django.conf import settings
 from django.core.management.base import BaseCommand
-from django.utils.importlib import import_module
+try:
+    from importlib import import_module
+except ImportError:
+    from django.utils.importlib import import_module
 
-from huey.bin.huey_consumer import Consumer
+try:
+    from django.apps import apps as django_apps
+    HAS_DJANGO_APPS = True
+except ImportError:
+    # Django 1.6
+    HAS_DJANGO_APPS = False
+
+from huey.consumer import Consumer
+from huey.bin.huey_consumer import get_loglevel
+from huey.bin.huey_consumer import setup_logger
 
 
 class Command(BaseCommand):
@@ -47,7 +59,20 @@ class Command(BaseCommand):
         ),
     )
 
-    def autodiscover(self):
+    def autodiscover_appconfigs(self):
+        """Use Django app registry to pull out potential apps with tasks.py module."""
+        module_name = 'tasks'
+        for config in django_apps.get_app_configs():
+            app_path = config.module.__path__
+            try:
+                fp, path, description = imp.find_module(module_name, app_path)
+            except ImportError:
+                continue
+            else:
+                import_path = '%s.%s' % (config.name, module_name)
+                imp.load_module(import_path, fp, path, description)
+
+    def autodiscover_old(self):
         # this is to find modules named <commands.py> in a django project's
         # installed apps directories
         module_name = 'tasks'
@@ -64,6 +89,13 @@ class Command(BaseCommand):
                 continue
             import_module('%s.%s' % (app, module_name))
             app_path = sys.modules['%s.%s' % (app, module_name)]
+
+    def autodiscover(self):
+        """Switch between Django 1.7 style and old style app importing."""
+        if HAS_DJANGO_APPS:
+            self.autodiscover_appconfigs()
+        else:
+            self.autodiscover_old()
 
     def handle(self, *args, **options):
         from huey.djhuey import HUEY
@@ -85,6 +117,10 @@ class Command(BaseCommand):
             consumer_options['max_delay'] = options['max_delay']
 
         self.autodiscover()
+
+        loglevel = get_loglevel(consumer_options.pop('loglevel', None))
+        logfile = consumer_options.pop('logfile', None)
+        setup_logger(loglevel, logfile)
 
         consumer = Consumer(HUEY, **consumer_options)
         consumer.run()

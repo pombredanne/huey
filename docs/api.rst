@@ -42,16 +42,15 @@ Function decorators and helpers
 
         from huey.api import Huey, crontab
         from huey.backends.redis_backend import RedisBlockingQueue, RedisDataStore,\
-            RedisSchedule, RedisEventEmitter
+            RedisSchedule
 
-        queue = RedisBlockingQueue('my-app')
-        result_store = RedisDataStore('my-app')
-        schedule = RedisSchedule('my-app')
-        events = RedisEventEmitter('my-app')
-        huey = Huey(queue, result_store, schedule, events)
+        huey = RedisHuey('my-app')
 
         # THIS IS EQUIVALENT TO ABOVE CODE:
-        # huey = RedisHuey('my-app')
+        #queue = RedisBlockingQueue('my-app')
+        #result_store = RedisDataStore('my-app')
+        #schedule = RedisSchedule('my-app')
+        #huey = Huey(queue, result_store, schedule)
 
         @huey.task()
         def slow_function(some_arg):
@@ -63,7 +62,7 @@ Function decorators and helpers
             # do a backup every day at 3am
             return
 
-    .. py:method:: task([retries=0[, retry_delay=0[, retries_as_argument=False]]])
+    .. py:method:: task([retries=0[, retry_delay=0[, retries_as_argument=False[, include_task=False]]]])
 
         Function decorator that marks the decorated function for processing by the
         consumer. Calls to the decorated function will do the following:
@@ -119,13 +118,15 @@ Function decorators and helpers
         :param int retry_delay: number of seconds to wait between retries
         :param boolean retries_as_argument: whether the number of retries should
             be passed in to the decorated function as an argument.
+        :param boolean include_task: whether the task instance itself should be
+            passed in to the decorated function as the ``task`` argument.
         :rtype: decorated function
 
-        The return value of any calls to the decorated function depends on whether the invoker
-        is configured with a ``result_store``.  If a result store is configured, the
-        decorated function will return an :py:class:`AsyncData` object which can fetch the
-        result of the call from the result store -- otherwise it will simply
-        return ``None``.
+        The return value of any calls to the decorated function depends on whether
+        the :py:class:`Huey` instance is configured with a ``result_store``.  If a
+        result store is configured, the decorated function will return
+        an :py:class:`AsyncData` object which can fetch the result of the call from
+        the result store -- otherwise it will simply return ``None``.
 
         The ``task`` decorator also does one other important thing -- it adds
         a special function **onto** the decorated function, which makes it possible
@@ -157,6 +158,15 @@ Function decorators and helpers
                                 time to UTC, defaults to ``True``
             :rtype: like calls to the decorated function, will return an :py:class:`AsyncData`
                     object if a result store is configured, otherwise returns ``None``
+
+        .. py:function:: {decorated func}.call_local
+
+            Call the ``@task``-decorated function without enqueueing the call. Or, in other words, ``call_local()`` provides access to the actual function.
+
+            .. code-block:: pycon
+
+                >>> count_some_beans.call_local(1337)
+                'Counted 1337 beans'
 
         .. py:attribute:: {decorated func}.task_class
 
@@ -492,11 +502,12 @@ written by Andy McCurdy.
     :param name: the name of the queue to use
     :param connection: a list of values passed directly into the ``redis.Redis`` class
 
-.. py:class:: RedisBlockingQueue(name, **connection)
+.. py:class:: RedisBlockingQueue(name, read_timeout=None, **connection)
 
-    Does a ``BRPOP`` to pull messages from the queue, meaning that it blocks on reads.
+    Does a ``BRPOP`` to pull messages from the queue, meaning that it blocks on reads. By default Huey will block forever waiting for a message, but if you want, you can specify a timeout in seconds. This may prevent the consumer from getting hung waiting on tasks in the event of network disruptions or similar quirks.
 
     :param name: the name of the queue to use
+    :param int read_timeout: limit blocking pop to ``read_timeout`` seconds.
     :param connection: a list of values passed directly into the ``redis.Redis`` class
 
 .. py:class:: RedisDataStore(name, **connection)

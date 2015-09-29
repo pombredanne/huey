@@ -1,16 +1,17 @@
 from collections import deque
 import datetime
 import os
+import sys
 import tempfile
 import unittest
 
+from huey.api import Huey
 from huey.backends.dummy import DummyDataStore
 from huey.backends.dummy import DummyEventEmitter
 from huey.backends.dummy import DummyQueue
 from huey.backends.dummy import DummySchedule
 from huey.utils import EmptyData
 from huey.backends.sqlite_backend import SqliteDataStore
-from huey.backends.sqlite_backend import SqliteEventEmitter
 from huey.backends.sqlite_backend import SqliteQueue
 from huey.backends.sqlite_backend import SqliteSchedule
 try:
@@ -21,11 +22,22 @@ try:
 except ImportError:
     RedisQueue = RedisDataStore = RedisSchedule = RedisEventEmitter = None
 
+try:
+    from huey.backends.rabbitmq_backend import RabbitQueue, RabbitEventEmitter
+except ImportError:
+    RabbitQueue = RabbitEventEmitter = None
 
-QUEUES = (DummyQueue, RedisQueue, SqliteQueue)
-DATA_STORES = (DummyDataStore, RedisDataStore, SqliteDataStore)
-SCHEDULES = (DummySchedule, RedisSchedule, SqliteSchedule)
-EVENTS = (DummyEventEmitter, RedisEventEmitter, SqliteEventEmitter)
+
+if sys.version_info[0] == 2:
+    redis_kwargs = {}
+else:
+    redis_kwargs = {'decode_responses': True}
+
+
+QUEUES = (DummyQueue, RedisQueue, SqliteQueue, RabbitQueue)
+DATA_STORES = (DummyDataStore, RedisDataStore, SqliteDataStore, None)
+SCHEDULES = (DummySchedule, RedisSchedule, SqliteSchedule, None)
+EVENTS = (DummyEventEmitter, RedisEventEmitter, None, RabbitEventEmitter)
 
 
 class HueyBackendTestCase(unittest.TestCase):
@@ -36,13 +48,17 @@ class HueyBackendTestCase(unittest.TestCase):
         os.unlink(self.sqlite_location)
 
     def test_queues(self):
+        result_store = DummyDataStore('dummy')
         for q in QUEUES:
             if not q:
                 continue
             if issubclass(q, SqliteQueue):
                 queue = q('test', location=self.sqlite_location)
+            elif issubclass(q, RedisQueue):
+                queue = q('test', **redis_kwargs)
             else:
                 queue = q('test')
+            queue.flush()
             queue.write('a')
             queue.write('b')
             self.assertEqual(len(queue), 2)
@@ -62,12 +78,32 @@ class HueyBackendTestCase(unittest.TestCase):
             self.assertEqual(queue.read(), 'x')
             self.assertEqual(queue.read(), 'd')
 
+            queue.flush()
+            test_huey = Huey(queue, result_store)
+
+            @test_huey.task()
+            def test_queues_add(k, v):
+                return k + v
+
+            res = test_queues_add('k', 'v')
+            self.assertEqual(len(queue), 1)
+            task = test_huey.dequeue()
+            test_huey.execute(task)
+            self.assertEqual(res.get(), 'kv')
+
+            res = test_queues_add('\xce', '\xcf')
+            task = test_huey.dequeue()
+            test_huey.execute(task)
+            self.assertEqual(res.get(), '\xce\xcf')
+
     def test_data_stores(self):
         for d in DATA_STORES:
             if not d:
                 continue
             if issubclass(d, SqliteDataStore):
                 data_store = d('test', location=self.sqlite_location)
+            elif issubclass(d, RedisDataStore):
+                data_store = d('test', **redis_kwargs)
             else:
                 data_store = d('test')
             data_store.put('k1', 'v1')
@@ -88,6 +124,8 @@ class HueyBackendTestCase(unittest.TestCase):
                 continue
             if issubclass(s, SqliteSchedule):
                 schedule = s('test', location=self.sqlite_location)
+            elif issubclass(s, RedisSchedule):
+                schedule = s('test', **redis_kwargs)
             else:
                 schedule = s('test')
             dt1 = datetime.datetime(2013, 1, 1, 0, 0)
@@ -122,10 +160,7 @@ class HueyBackendTestCase(unittest.TestCase):
         for e in EVENTS:
             if not e:
                 continue
-            if issubclass(e, SqliteEventEmitter):
-                e = e('test', location=self.sqlite_location)
-            else:
-                e = e('test')
+            e = e('test')
 
             messages = ['a', 'b', 'c', 'd']
             for message in messages:

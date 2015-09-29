@@ -4,10 +4,11 @@ using Django settings.  Unlike more flexible python apps, the huey django
 integration consists of a single global Huey instance configured via the
 settings module.
 """
+from functools import wraps
 import sys
 
 from django.conf import settings
-from django.db import close_connection
+from django.db import connection
 
 from huey import crontab
 from huey import Huey
@@ -89,9 +90,9 @@ if not isinstance(HUEY, Huey):
     always_eager = HUEY.get('always_eager', False)
     HUEY = Huey(
         Queue(name, **conn),
-        DataStore(name, **conn),
-        Schedule(name, **conn),
-        Events(name, **conn),
+        DataStore and DataStore(name, **conn) or None,
+        Schedule and Schedule(name, **conn) or None,
+        Events and Events(name, **conn) or None,
         always_eager=always_eager)
 
 task = HUEY.task
@@ -99,19 +100,20 @@ periodic_task = HUEY.periodic_task
 
 def close_db(fn):
     """Decorator to be used with tasks that may operate on the database."""
+    @wraps(fn)
     def inner(*args, **kwargs):
         try:
             return fn(*args, **kwargs)
         finally:
-            close_connection()
+            connection.close()
     return inner
 
 def db_task(*args, **kwargs):
     def decorator(fn):
-        return close_db(task(*args, **kwargs)(fn))
+        return task(*args, **kwargs)(close_db(fn))
     return decorator
 
 def db_periodic_task(*args, **kwargs):
     def decorator(fn):
-        return close_db(periodic_task(*args, **kwargs)(fn))
+        return periodic_task(*args, **kwargs)(close_db(fn))
     return decorator

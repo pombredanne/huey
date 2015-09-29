@@ -75,15 +75,20 @@ class Huey(object):
         self.always_eager = always_eager
 
     def task(self, retries=0, retry_delay=0, retries_as_argument=False,
-             name=None):
+             include_task=False, name=None):
         def decorator(func):
             """
             Decorator to execute a function out-of-band via the consumer.
             """
-            klass = create_task(QueueTask, func, retries_as_argument, name)
+            klass = create_task(
+                QueueTask,
+                func,
+                retries_as_argument,
+                name,
+                include_task)
 
             def schedule(args=None, kwargs=None, eta=None, delay=None,
-                         convert_utc=True):
+                         convert_utc=True, task_id=None):
                 if delay and eta:
                     raise ValueError('Both a delay and an eta cannot be '
                                      'specified at the same time')
@@ -96,7 +101,8 @@ class Huey(object):
                     (args or (), kwargs or {}),
                     execute_time=eta,
                     retries=retries,
-                    retry_delay=retry_delay)
+                    retry_delay=retry_delay,
+                    task_id=task_id)
                 return self.enqueue(cmd)
 
             func.schedule = schedule
@@ -109,6 +115,8 @@ class Huey(object):
                     retries=retries,
                     retry_delay=retry_delay)
                 return self.enqueue(cmd)
+
+            inner_run.call_local = func
             return inner_run
         return decorator
 
@@ -334,6 +342,10 @@ class AsyncData(object):
         self.huey.restore(self.task)
 
 
+def with_metaclass(meta, base=object):
+    return meta("NewBase", (base,), {})
+
+
 class QueueTaskMetaClass(type):
     def __init__(cls, name, bases, attrs):
         """
@@ -342,7 +354,7 @@ class QueueTaskMetaClass(type):
         registry.register(cls)
 
 
-class QueueTask(object):
+class QueueTask(with_metaclass(QueueTaskMetaClass)):
     """
     A class that encapsulates the logic necessary to 'do something' given some
     arbitrary data.  When enqueued with the :class:`Huey`, it will be
@@ -365,8 +377,6 @@ class QueueTask(object):
         })
     )
     """
-
-    __metaclass__ = QueueTaskMetaClass
 
     def __init__(self, data=None, task_id=None, execute_time=None, retries=0,
                  retry_delay=0):
@@ -407,11 +417,13 @@ class PeriodicQueueTask(QueueTask):
 
 
 def create_task(task_class, func, retries_as_argument=False, task_name=None,
-                **kwargs):
+                include_task=False, **kwargs):
     def execute(self):
         args, kwargs = self.data or ((), {})
         if retries_as_argument:
             kwargs['retries'] = self.retries
+        if include_task:
+            kwargs['task'] = self
         return func(*args, **kwargs)
 
     attrs = {

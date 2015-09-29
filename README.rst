@@ -1,7 +1,7 @@
 huey - a little task queue
 ==========================
 
-.. image:: http://i.imgur.com/2EpRs.jpg
+.. image:: http://media.charlesleifer.com/blog/photos/huey-logo.png
 
 a lightweight alternative.
 
@@ -17,10 +17,12 @@ supports:
 * retrying tasks that fail
 * task result storage
 
+.. image:: http://i.imgur.com/2EpRs.jpg
+
 Huey's API
 ----------
 
-::
+.. code-block:: python
 
     from huey import RedisHuey, crontab
 
@@ -35,6 +37,17 @@ Huey's API
         sync_all_data()
 
 
+Documentation
+----------------
+
+`See Huey documentation <http://huey.readthedocs.org/>`_.
+
+Project page
+---------------
+
+`See source code and issue tracker on Github <https://github.com/coleifer/huey/>`_.
+
 named after my cat:
 
 .. image:: http://media.charlesleifer.com/blog/photos/thumbnails/IMG_20130402_154858_650x650.jpg
+
