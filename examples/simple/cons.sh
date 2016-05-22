@@ -4,4 +4,5 @@ echo "-------------"
 echo "In another terminal, run 'python main.py'"
 echo "Stop the consumer using Ctrl+C"
 PYTHONPATH=.:$PYTHONPATH
-python ../../huey/bin/huey_consumer.py main.huey --threads=2
+export WORKER_CLASS=${1:-thread}
+python ../../huey/bin/huey_consumer.py main.huey --workers=2 -v -s 10 -k $WORKER_CLASS

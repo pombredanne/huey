@@ -10,7 +10,7 @@ fuss as possible.
 .. _getting-started-python:
 
 General guide
--------------
+^^^^^^^^^^^^^
 
 There are three main components (or processes) to consider when running huey:
 
@@ -29,7 +29,7 @@ enqueued (``LPUSH``) and read (``BRPOP``) from the database.
 
 
 Trying it out yourself
-^^^^^^^^^^^^^^^^^^^^^^
+----------------------
 
 Assuming you've got :ref:`huey installed <installation>`, let's look at the code
 from this example.
@@ -40,18 +40,16 @@ a :py:class:`Huey` instance, which specifies which backend to use.
 .. code-block:: python
 
     # config.py
-    from huey import Huey
-    from huey.backends.redis_backend import RedisBlockingQueue
+    from huey import RedisHuey
 
-    queue = RedisBlockingQueue('test-queue', host='localhost', port=6379)
-    huey = Huey(queue)
+    huey = RedisHuey()
 
 
-The interesting parts of this configuration module are the :py:class:`Huey` object
-and the :py:class:`RedisBlockingQueue` object.  The ``queue`` is responsible for
-storing and retrieving messages, and the ``huey`` is used by your application
-code to coordinate function calls with a queue backend.  We'll see how the ``huey``
-is used when looking at the actual function responsible for counting beans:
+The ``huey`` object encapsulates a queue. The queue is responsible for
+storing and retrieving messages, and the ``huey`` instance is used by your
+application code to coordinate function calls with a queue backend.  We'll
+see how the ``huey`` object is used when looking at the actual function
+responsible for counting beans:
 
 .. code-block:: python
 
@@ -66,9 +64,10 @@ is used when looking at the actual function responsible for counting beans:
 The above example shows the API for writing "tasks" that are executed by the
 queue consumer -- simply decorate the code you want executed by the consumer
 with the :py:meth:`~Huey.task` decorator and when it is called, the main
-process will return *immediately* after enqueueing the function call.
+process will return *immediately* after enqueueing the function call. In a
+separate process, the consumer will see the new message and run the function.
 
-The main executable is very simple.  It imports both the configuration **and**
+Our main executable is very simple.  It imports both the configuration **and**
 the tasks - this is to ensure that when we run the consumer by pointing it
 at the configuration, the tasks are also imported and loaded into memory.
 
@@ -93,32 +92,14 @@ To run these scripts, follow these steps:
 4. Run the main program: ``python main.py``
 
 Getting results from jobs
-^^^^^^^^^^^^^^^^^^^^^^^^^
+-------------------------
 
 The above example illustrates a "send and forget" approach, but what if your
 application needs to do something with the results of a task?  To get results
-from your tasks, we'll set up the ``RedisDataStore`` by adding the following
-lines to the ``config.py`` module:
+from your tasks, just return a value in your task function.
 
-.. code-block:: python
-
-    from huey import Huey
-    from huey.backends.redis_backend import RedisBlockingQueue
-    from huey.backends.redis_backend import RedisDataStore  # ADD THIS LINE
-
-
-    queue = RedisBlockingQueue('test-queue', host='localhost', port=6379)
-    result_store = RedisDataStore('results', host='localhost', port=6379)  # ADDED
-
-    huey = Huey(queue, result_store=result_store) # ADDED result store
-
-We can actually shorten this code to:
-
-.. code-block:: python
-
-    from huey import RedisHuey
-
-    huey = RedisHuey('test-queue', host='localhost', port=6379)
+.. note::
+    If you are storing results but are not using them, that can waste significant space, especially if your task volume is high. To disable result storage, you can either return ``None`` or specify ``result_store=False`` when initializing your :py:class:`Huey` instance.
 
 To better illustrate getting results, we'll also modify the ``tasks.py``
 module to return a string rather in addition to printing to stdout:
@@ -140,9 +121,10 @@ program, though, we'll start an interpreter and run the following:
 
     >>> from main import count_beans
     >>> res = count_beans(100)
-    >>> res  # what is "res" ?
-    <huey.api.AsyncData object at 0xb7471a4c>
-    >>> res.get()  # get the result of this task
+    >>> print res                      # What is "res" ?
+    <huey.api.TaskResultWrapper object at 0xb7471a4c>
+
+    >>> res()                          # Get the result of this task
     'Counted 100 beans'
 
 Following the same layout as our last example, here is a screenshot of the three
@@ -157,7 +139,7 @@ main processes at work:
 
 
 Executing tasks in the future
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+------------------------------
 
 It is often useful to enqueue a particular task to execute at some arbitrary time
 in the future, for example, mark a blog entry as published at a certain time.
@@ -170,11 +152,14 @@ and see how huey handles it.  Execute the following:
 
     >>> import datetime
     >>> res = count_beans.schedule(args=(100,), delay=60)
-    >>> res
-    <huey.api.AsyncData object at 0xb72915ec>
-    >>> res.get()  # this returns None, no data is ready
-    >>> res.get()  # still no data...
-    >>> res.get(blocking=True)  # ok, let's just block until its ready
+    >>> print res
+    <huey.api.TaskResultWrapper object at 0xb72915ec>
+
+    >>> res()  # This returns None, no data is ready.
+
+    >>> res()  # A couple seconds later.
+
+    >>> res(blocking=True)  # OK, let's just block until its ready
     'Counted 100 beans'
 
 You can specify an "estimated time of arrival" as well using datetimes:
@@ -198,7 +183,7 @@ Here is a screenshot showing the same:
 
 
 Retrying tasks that fail
-^^^^^^^^^^^^^^^^^^^^^^^^
+------------------------
 
 Huey supports retrying tasks a finite number of times.  If an exception is raised
 during the execution of the task and ``retries`` have been specified, the task
@@ -252,7 +237,7 @@ also "counted some beans" -- that gets executed normally, in between retries.
 
 
 Executing tasks at regular intervals
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+------------------------------------
 
 The final usage pattern supported by huey is the execution of tasks at regular
 intervals.  This is modeled after ``crontab`` behavior, and even follows similar
@@ -280,17 +265,14 @@ Now, when we run the consumer it will start printing the time every minute:
 .. image:: crontab.png
 
 
-Preventing tasks from executing
--------------------------------
+Canceling or pausing tasks
+--------------------------
 
 It is possible to prevent tasks from executing.  This applies to normal tasks,
 tasks scheduled in the future, and periodic tasks.
 
 .. note:: In order to "revoke" tasks you will need to specify a ``result_store``
     when instantiating your :py:class:`Huey` object.
-
-Canceling a normal task or one scheduled in the future
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 You can cancel a normal task provided the task has not started execution by
 the consumer:
@@ -301,7 +283,7 @@ the consumer:
     res = count_beans(10000000)
 
     # provided the command has not started executing yet, you can
-    # cancel it by calling revoke() on the AsyncData object
+    # cancel it by calling revoke() on the TaskResultWrapper object
     res.revoke()
 
 
@@ -316,9 +298,8 @@ The same applies to tasks that are scheduled in the future:
     # it has not already been "skipped" by the consumer
     res.restore()
 
-
-Canceling tasks that execute periodically
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Canceling or pausing periodic tasks
+-----------------------------------
 
 When we start dealing with periodic tasks, the options for revoking get
 a bit more interesting.
@@ -368,21 +349,16 @@ execution:
 
     print_time.restore()
 
-
 Reading more
-^^^^^^^^^^^^
+------------
 
 That sums up the basic usage patterns of huey.  Below are links for details
 on other aspects of the API:
 
-* :py:class:`~Huey` - responsible for coordinating executable tasks and queue backends
-* :py:meth:`~Huey.task` - decorator to indicate an executable task
-* :py:meth:`~Huey.periodic_task` - decorator to indicate a task that executes at periodic intervals
+* :py:class:`Huey` - responsible for coordinating executable tasks and queue backends
+* :py:meth:`Huey.task` - decorator to indicate an executable task
+* :py:meth:`Huey.periodic_task` - decorator to indicate a task that executes at periodic intervals
+* :py:meth:`TaskResultWrapper.get` - get the return value from a task
 * :py:func:`crontab` - a function for defining what intervals to execute a periodic command
-* :py:class:`BaseQueue` - the queue interface and writing your own backends
-* :py:class:`BaseDataStore` - the simple data store used for results and schedule serialization
 
 Also check out the :ref:`notes on running the consumer <consuming-tasks>`.
-
-.. note::
-    If you're using Django, check out the :ref:`django integration <django>`.

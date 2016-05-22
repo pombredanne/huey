@@ -1,17 +1,17 @@
 import logging
 
 INSTALLED_APPS = [
-    'huey.djhuey',
+    'huey.contrib.djhuey',
     'djangoex.test_app',
 ]
 
 HUEY = {
     'name': 'test-django',
-    'backend': 'huey.backends.redis_backend',
-    'consumer_options': {
+    'consumer': {
         'loglevel': logging.DEBUG,
         'workers': 2,
-    }
+        'scheduler_interval': 5,
+    },
 }
 
 SECRET_KEY = 'foo'

@@ -1,13 +1,11 @@
 import imp
 import sys
+from importlib import import_module
 from optparse import make_option
 
+import django
 from django.conf import settings
 from django.core.management.base import BaseCommand
-try:
-    from importlib import import_module
-except ImportError:
-    from django.utils.importlib import import_module
 
 try:
     from django.apps import apps as django_apps
@@ -20,6 +18,18 @@ from huey.consumer import Consumer
 from huey.bin.huey_consumer import get_loglevel
 from huey.bin.huey_consumer import setup_logger
 
+class CompatParser(object):
+    """Converts argeparse arguments to optparse for Django < 1.8 compatibility."""
+
+    def __init__(self, command):
+        self.command = command
+
+    def add_argument(self, *args, **kwargs):
+        if 'type' in kwargs:
+            # Convert `type=int` to `type="int"`, etc.
+            kwargs['type'] = kwargs['type'].__name__
+        self.command.option_list +=  (make_option(*args, **kwargs),)
+
 
 class Command(BaseCommand):
     """
@@ -31,33 +41,40 @@ class Command(BaseCommand):
     """
     help = "Run the queue consumer"
 
-    option_list = BaseCommand.option_list + (
-        make_option('--periodic', '-p',
-            dest='periodic',
-            action='store_true',
-            help='Enqueue periodic commands'
-        ),
-        make_option('--no-periodic', '-n',
+    def __init__(self, *args, **kwargs):
+        if django.VERSION < (1, 8):
+            self.option_list = BaseCommand.option_list
+            parser = CompatParser(self)
+            self.add_arguments(parser)
+
+    def add_arguments(self, parser):
+        parser.add_argument(
+            '--workers', '-w',
+            dest='workers',
+            type=int,
+            help='Number of worker threads/processes/greenlets')
+        parser.add_argument(
+            '--worker-type', '-k',
+            dest='worker_type',
+            help='worker execution model (thread, greenlet, process).',
+            default='thread',
+            choices=['greenlet', 'thread', 'process', 'gevent'])
+        parser.add_argument(
+            '--delay', '-d',
+            dest='initial_delay',
+            type=float,
+            help='Delay between polling requests')
+        parser.add_argument(
+            '--max_delay', '-m',
+            dest='max_delay',
+            type=float,
+            help='Maximum delay between polling requests')
+        parser.add_argument(
+            '--no-periodic', '-n',
+            default=True,
             dest='periodic',
             action='store_false',
-            help='Do not enqueue periodic commands'
-        ),
-        make_option('--workers', '-w',
-            dest='workers',
-            type='int',
-            help='Number of worker threads'
-        ),
-        make_option('--delay', '-d',
-            dest='initial_delay',
-            type='float',
-            help='Delay between polling requests'
-        ),
-        make_option('--max_delay', '-m',
-            dest='max_delay',
-            type='float',
-            help='Maximum delay between polling requests'
-        ),
-    )
+            help='Do not enqueue periodic commands')
 
     def autodiscover_appconfigs(self):
         """Use Django app registry to pull out potential apps with tasks.py module."""
@@ -98,14 +115,17 @@ class Command(BaseCommand):
             self.autodiscover_old()
 
     def handle(self, *args, **options):
-        from huey.djhuey import HUEY
-        try:
-            consumer_options = settings.HUEY['consumer_options']
-        except:
-            consumer_options = {}
+        from huey.contrib.djhuey import HUEY
+
+        consumer_options = {}
+        if isinstance(settings.HUEY, dict):
+            consumer_options.update(settings.HUEY.get('consumer', {}))
 
         if options['workers'] is not None:
             consumer_options['workers'] = options['workers']
+
+        if options['worker_type'] is not None:
+            consumer_options['worker_type'] = options['worker_type']
 
         if options['periodic'] is not None:
             consumer_options['periodic'] = options['periodic']
@@ -120,7 +140,7 @@ class Command(BaseCommand):
 
         loglevel = get_loglevel(consumer_options.pop('loglevel', None))
         logfile = consumer_options.pop('logfile', None)
-        setup_logger(loglevel, logfile)
+        setup_logger(loglevel, logfile, consumer_options['worker_type'])
 
         consumer = Consumer(HUEY, **consumer_options)
         consumer.run()

@@ -6,15 +6,14 @@ huey - a little task queue
 a lightweight alternative.
 
 * written in python
-* no deps outside the standard lib, except Redis (or you can roll your own backend)
-* support for Django
+* only dependency is the Python Redis client
 
 supports:
 
-* multi-threaded task execution
-* scheduled execution at a given time
-* periodic execution, like a crontab
-* retrying tasks that fail
+* multi-process, multi-thread or greenlet task execution models
+* schedule tasks to execute at a given time, or after a given delay
+* schedule recurring tasks, like a crontab
+* retry tasks that fail automatically
 * task result storage
 
 .. image:: http://i.imgur.com/2EpRs.jpg
@@ -36,6 +35,12 @@ Huey's API
     def nightly_backup():
         sync_all_data()
 
+To run the consumer with 4 worker processes:
+
+.. code-block:: console
+
+    $ huey_consumer.py my_app.huey -k process -w 4
+
 
 Documentation
 ----------------
@@ -47,7 +52,7 @@ Project page
 
 `See source code and issue tracker on Github <https://github.com/coleifer/huey/>`_.
 
-named after my cat:
+Huey is named in honor of my cat:
 
 .. image:: http://media.charlesleifer.com/blog/photos/thumbnails/IMG_20130402_154858_650x650.jpg
 

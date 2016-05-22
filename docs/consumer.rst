@@ -38,27 +38,27 @@ their default values.
 
 ``-l``, ``--logfile``
     Path to file used for logging.  When a file is specified, by default Huey
-    will use a rotating file handler (1MB / chunk) with a maximum of 3 backups.
-    You can attach your own handler (``huey.logger``) as well.  The default
-    loglevel is ``INFO``.
+    the logfile will grow indefinitely, so you may wish to configure a tool
+    like ``logrotate``.
+
+    Alternatively, you can attach your own handler to ``huey.logger`` as well.
+
+    The default loglevel is ``INFO``.
 
 ``-v``, ``--verbose``
-    Verbose logging (equates to ``DEBUG`` level).  If no logfile is specified
-    and verbose is set, then the consumer will log to the console.  **This is
-    very useful for testing/debugging.**
+    Verbose logging (loglevel=``DEBUG``). If no logfile is specified and
+    verbose is set, then the consumer will log to the console.
 
- ``-q``, ``--quiet``
-    Only log errors. The default loglevel for the consumer is ``INFO``.
+``-q``, ``--quiet``
+    Only log errors.
 
 ``-w``, ``--workers``
-    Number of worker threads, the default is ``1`` thread but for applications
-    that have many I/O bound tasks, increasing this number may lead to greater
-    throughput.
+    Number of worker threads/processes/greenlets, the default is ``1`` but
+    some applications may want to increase this number for greater throughput.
 
-``-p``, ``--periodic``
-    Indicate that this consumer process should start a thread dedicated to
-    enqueueing "periodic" tasks (crontab-like functionality).  This defaults
-    to ``True``, so should not need to be specified in practice.
+``-k``, ``--worker-type``
+    Choose the worker type, ``thread``, ``process`` or ``greenlet``. The default
+    is ``thread``.
 
 ``-n``, ``--no-periodic``
     Indicate that this consumer process should *not* enqueue periodic tasks.
@@ -75,6 +75,10 @@ their default values.
     The amount to back-off when polling for results.  Must be greater than
     one.  Default is 1.15.
 
+``-s``, ``--scheduler-interval``
+    The frequency with which the scheduler should run. By default this will run
+    every second, but you can increase the interval to as much as 60 seconds.
+
 ``-u``, ``--utc``
     Indicates that the consumer should use UTC time for all tasks, crontabs
     and scheduling.  Default is True, so in practice you should not need to
@@ -87,12 +91,12 @@ their default values.
 Examples
 ^^^^^^^^
 
- Running the consumer with 8 threads, a logfile for errors only, and a very
- short polling interval:
+Running the consumer with 8 threads, a logfile for errors only, and a very
+short polling interval:
 
- .. code-block:: bash
+.. code-block:: bash
 
-    huey_consumer.py my.app.huey -l /var/log/app.huey.log -w 8 -b 1.1 -m 1.0
+  huey_consumer.py my.app.huey -l /var/log/app.huey.log -w 8 -b 1.1 -m 1.0
 
 Running single-threaded without a crontab and logging to stdout:
 
@@ -100,26 +104,28 @@ Running single-threaded without a crontab and logging to stdout:
 
     huey_consumer.py my.app.huey -v -n
 
+Using multi-processing to run 4 worker processes:
+
+.. code-block:: bash
+
+    huey_consumer.py my.app.huey -w 4 -k process
+
 
 Consumer Internals
 ------------------
 
-The consumer is composed of 3 types of threads:
+The consumer is composed of a master process, the scheduler, and the worker(s).
+Depending on the worker type chosen, the scheduler and workers will be run in
+their threads, processes or greenlets.
 
-* Worker threads
-* Scheduler
-* Periodic task scheduler (optional)
-
-These threads coordinate the receipt, execution and scheduling of various
+These components coordinate the receipt, execution and scheduling of various
 tasks.  What happens when you call a decorated function in your application?
 
 1. You call a function -- huey has decorated it, which triggers a message being
    put into the queue.  At this point your application returns.  If you are using
-   a "data store", then you will be return an :py:class:`AsyncData` object.
-2. In a separate process, the consumer will be listening for new messages --
-   one of the worker threads will pull down the message.  If your backend supports
-   blocking, it will block until a new message is available, otherwise it will
-   poll.
+   a "data store", then you will be return an :py:class:`TaskResultWrapper` object.
+2. In a separate process, a worker will be listening for new messages --
+   one of the workers will pull down the message.
 3. The worker looks at the message and checks to see if it can be
    run (i.e., was this message "revoked"?  Is it scheduled to actually run
    later?).  If it is revoked, the message is thrown out.  If it is scheduled
@@ -129,48 +135,17 @@ tasks.  What happens when you call a decorated function in your application?
    can be retried, it is either enqueued or added to the schedule (which happens
    if a delay is specified between retries).
 
-While all this is going on, the Scheduler thread is continually looking at
-its schedule to see if any commands are ready to be executed.  If a command
-is ready to run, it is enqueued and will be processed by the Message receiver
-thread.
+While all this is going on, the Scheduler is looking at its schedule to see
+if any tasks are ready to be executed.  If a task is ready to run, it is
+enqueued and will be processed by a worker.
 
-Similarly, the Periodic task thread will run every minute to see if there are
-any regularly-scheduled tasks to run at that time.  Those tasks will be enqueued
-and processed by the Message receiver thread.
+If you are using the Periodic Task feature (cron), then every minute, the
+scheduler will check through the various periodic tasks to see if any should
+be run. If so, these tasks are enqueued.
 
-When the consumer is shut-down (SIGTERM) it will save the schedule and finish
-any jobs that are currently being worked on.
+When the consumer is shut-down cleanly (SIGTERM), any workers still involved in the execution of a task will complete their work.
 
+Events
+------
 
-Consumer Event Emitter
-----------------------
-
-If you specify a :py:class:`RedisEventEmitter` when setting up your :py:class:`Huey`
-instance (or if you choose to use :py:class:`RedisHuey`), the consumer will publish
-real-time events about the status of various tasks.  You can subscribe to these
-events in your own application.
-
-When an event is emitted, the following information is provided (serialized as
-JSON):
-
-* ``status``: a String indicating what type of event this is.
-* ``id``: the UUID of the task.
-* ``task``: a user-friendly name indicating what type of task this is.
-* ``retries``: how many retries the task has remaining.
-* ``retry_delay``: how long to sleep before retrying the task in event of failure.
-* ``execute_time``: A unix timestamp indicating when the task is scheduled to
-    execute (this may be ``None``).
-* ``error``: A boolean value indicating if there was an error.
-* ``traceback``: A string traceback of the error, if one occurred.
-
-The following events are emitted by the consumer:
-
-* ``enqueued``: sent when a task is enqueued.
-* ``scheduled``: sent when a task is added to the schedule for execution in
-    the future.
-* ``revoked``: sent when a task is not executed because it has been revoked.
-* ``started``: sent when a worker thread begins executing a task.
-* ``finished``: sent when a worker thread finishes executing a task and has
-    stored the result.
-* ``error``: sent when an exception occurs while executing a task.
-* ``retrying``: sent when retrying a task that failed.
+As the consumer processes tasks, it can be configured to emit events. For information on consumer-sent events, check out the :ref:`events` documentation.
