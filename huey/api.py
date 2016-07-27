@@ -10,7 +10,6 @@ from functools import wraps
 from huey.exceptions import DataStoreGetException
 from huey.exceptions import DataStorePutException
 from huey.exceptions import DataStoreTimeout
-from huey.exceptions import MetadataException
 from huey.exceptions import QueueException
 from huey.exceptions import QueueReadException
 from huey.exceptions import QueueRemoveException
@@ -39,8 +38,7 @@ class Huey(object):
         should store their results in the result store.
     :param always_eager: Useful for testing, this will execute all tasks
         immediately, without enqueueing them.
-    :param store_errors: Flag to indicate whether error tracebacks and
-        metadata should be stored.
+    :param store_errors: Flag to indicate whether task errors should be stored.
 
     Example usage::
 
@@ -237,11 +235,8 @@ class Huey(object):
             'task': type(task).__name__,
             'retries': task.retries,
             'retry_delay': task.retry_delay,
-            'execute_time': self._format_time(task.execute_time),
-            'error': error}
-        if error:
-            metadata['traceback'] = traceback.format_exc()
-        if include_data:
+            'execute_time': self._format_time(task.execute_time)}
+        if include_data and not isinstance(task, PeriodicQueueTask):
             targs, tkwargs = task.get_data()
             if tkwargs.get("task") and isinstance(tkwargs["task"], QueueTask):
                 del(tkwargs['task'])
@@ -249,28 +244,19 @@ class Huey(object):
 
         return metadata
 
-    def emit_status(self, status, **data):
+    def emit_status(self, status, error=False, **data):
         if self.events:
-            metadata = {'status': status}
+            metadata = {'status': status, 'error': error}
+            if error:
+                metadata['traceback'] = traceback.format_exc()
             metadata.update(data)
             self.emit(json.dumps(metadata))
 
     def emit_task(self, status, task, error=False, **data):
         if self.events:
-            metadata = self._get_task_metadata(task, error)
+            metadata = self._get_task_metadata(task)
             metadata.update(data)
-            self.emit_status(status, **metadata)
-
-    @_wrapped_operation(MetadataException)
-    def write_metadata(self, key, value):
-        self.storage.write_metadata(key, value)
-
-    @_wrapped_operation(MetadataException)
-    def incr_metadata(self, key, value=1):
-        return self.storage.incr_metadata(key, value)
-
-    def read_metadata(self, key):
-        return self.storage.read_metadata(key)
+            self.emit_status(status, error=error, **metadata)
 
     def execute(self, task):
         if not isinstance(task, QueueTask):
@@ -280,7 +266,9 @@ class Huey(object):
             result = task.execute()
         except Exception as exc:
             if self.result_store and self.store_errors:
-                metadata = self._get_task_metadata(task, exc, True)
+                metadata = self._get_task_metadata(task, True)
+                metadata['error'] = exc
+                metadata['traceback'] = traceback.format_exc()
                 self._put_error(pickle.dumps(metadata))
             raise
 
@@ -354,9 +342,6 @@ class Huey(object):
         return [
             pickle.loads(error)
             for error in self.storage.get_errors(limit, offset)]
-
-    def metadata(self):
-        return self.storage.metadata_values()
 
     def __len__(self):
         return self.pending_count()

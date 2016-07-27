@@ -80,21 +80,6 @@ class BaseStorage(object):
     def emit(self, message):
         raise NotImplementedError
 
-    def write_metadata(self, key, value):
-        raise NotImplementedError
-
-    def read_metadata(self, key):
-        raise NotImplementedError
-
-    def incr_metadata(self, key):
-        raise NotImplementedError
-
-    def metadata_values(self):
-        raise NotImplementedError
-
-    def flush_metadata(self):
-        raise NotImplementedError
-
     def __iter__(self):
         # Iterate over consumer-sent events.
         raise NotImplementedError
@@ -103,7 +88,6 @@ class BaseStorage(object):
         self.flush_queue()
         self.flush_schedule()
         self.flush_results()
-        self.flush_metadata()
         self.flush_errors()
 
 
@@ -135,7 +119,6 @@ class RedisStorage(BaseStorage):
         self.schedule_key = 'huey.schedule.%s' % self.name
         self.result_key = 'huey.results.%s' % self.name
         self.error_key = 'huey.errors.%s' % self.name
-        self.metadata_key = 'huey.metadata.%s' % self.name
 
         self.blocking = blocking
         self.read_timeout = read_timeout
@@ -200,15 +183,19 @@ class RedisStorage(BaseStorage):
         self.conn.hset(self.result_key, key, value)
 
     def peek_data(self, key):
-        if self.conn.hexists(self.result_key, key):
-            return self.conn.hget(self.result_key, key)
-        return EmptyData
+        pipe = self.conn.pipeline()
+        pipe.hexists(self.result_key, key)
+        pipe.hget(self.result_key, key)
+        exists, val = pipe.execute()
+        return EmptyData if not exists else val
 
     def pop_data(self, key):
-        val = self.peek_data(key)
-        if val is not EmptyData:
-            self.conn.hdel(self.result_key, key)
-        return val
+        pipe = self.conn.pipeline()
+        pipe.hexists(self.result_key, key)
+        pipe.hget(self.result_key, key)
+        pipe.hdel(self.result_key, key)
+        exists, val, n = pipe.execute()
+        return EmptyData if not exists else val
 
     def has_data_for_key(self, key):
         return self.conn.hexists(self.result_key, key)
@@ -234,24 +221,6 @@ class RedisStorage(BaseStorage):
 
     def flush_errors(self):
         self.conn.delete(self.error_key)
-
-    def write_metadata(self, key, value):
-        self.conn.hset(self.metadata_key, key, value)
-
-    def read_metadata(self, key):
-        return self.conn.hget(self.metadata_key, key)
-
-    def incr_metadata(self, key, value=1):
-        if isinstance(value, float):
-            return self.conn.hincrbyfloat(self.metadata_key, key, value)
-        else:
-            return self.conn.hincrby(self.metadata_key, key, value)
-
-    def metadata_values(self):
-        return self.conn.hgetall(self.metadata_key)
-
-    def flush_metadata(self):
-        self.conn.delete(self.metadata_key)
 
     def emit(self, message):
         self.conn.publish(self.name, message)
